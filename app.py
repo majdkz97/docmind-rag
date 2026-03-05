@@ -82,23 +82,16 @@ def ingest_and_query(file, question):
     try:
         # 1. Ingest new file if uploaded
         if file:
-            # Gradio file is a NamedString or dict-like object
-            # Save it to temporary disk path
-            with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(file.name)[1]) as tmp:
-                # Write the file content (file.content is bytes)
-                tmp.write(file.content)
-                tmp_path = tmp.name
+            # file is NamedString → use file.name as path
+            tmp_path = file.name
 
-            # Now load with LlamaIndex
             docs = SimpleDirectoryReader(input_files=[tmp_path]).load_data()
             splitter = SentenceSplitter(chunk_size=512, chunk_overlap=128)
             nodes = splitter.get_nodes_from_documents(docs)
 
-            # Insert new nodes into existing index
             index.insert_nodes(nodes)
-            os.unlink(tmp_path)  # clean up temp file
 
-            answer += f"New file ingested: {file.name} ({len(nodes)} chunks added)\n\n"
+            answer += f"New file ingested: {os.path.basename(tmp_path)} ({len(nodes)} chunks added)\n\n"
 
         # 2. Answer question if asked
         if question.strip():
@@ -114,7 +107,6 @@ def ingest_and_query(file, question):
 
     except Exception as e:
         return f"Error: {str(e)}", ""
-
 
 # Gradio interface
 with gr.Blocks(title="DocMind RAG") as demo:
