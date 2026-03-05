@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 # Configure LlamaIndex
 Settings.embed_model = HuggingFaceEmbedding(model_name="BAAI/bge-small-en-v1.5")
 Settings.llm = Fireworks(
-    model="accounts/fireworks/models/llama-v3p1-70b-instruct",
+    model="accounts/fireworks/models/llama-v3p3-70b-instruct",
     api_key=os.getenv("FIREWORKS_API_KEY"),
     temperature=0.0,
     max_tokens=512,
