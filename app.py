@@ -1,8 +1,8 @@
-# app.py – Week 2 Day 4: Gradio Web UI + Full RAG with Upload & Citations
+# app.py – Gradio Web UI + RAG with Upload-Only Ingestion
 import os
 import gradio as gr
 from dotenv import load_dotenv
-from llama_index.core import SimpleDirectoryReader, VectorStoreIndex, StorageContext, PromptTemplate
+from llama_index.core import SimpleDirectoryReader, VectorStoreIndex, StorageContext
 from llama_index.core.node_parser import SentenceSplitter
 from llama_index.core import Settings
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
@@ -12,6 +12,7 @@ from qdrant_client import QdrantClient
 from llama_index.core.query_engine import RetrieverQueryEngine
 from llama_index.core.postprocessor import SimilarityPostprocessor
 from llama_index.core.response_synthesizers import get_response_synthesizer
+from llama_index.core import PromptTemplate
 import logging
 import tempfile
 
@@ -36,65 +37,62 @@ qdrant_client = QdrantClient(path="./qdrant_data")
 vector_store = QdrantVectorStore(client=qdrant_client, collection_name="doc_chunks")
 storage_context = StorageContext.from_defaults(vector_store=vector_store)
 
-def get_or_build_index():
-    """Load existing Qdrant index or build new one from documents folder"""
-    if os.path.exists("./qdrant_data/collections/doc_chunks"):
-        logger.info("Loading existing Qdrant index")
-        return VectorStoreIndex.from_vector_store(vector_store, storage_context=storage_context)
-    
-    logger.info("Building new index from documents folder")
-    docs = SimpleDirectoryReader(input_dir="documents", required_exts=[".pdf", ".txt", ".docx"]).load_data()
-    if not docs:
-        raise ValueError("No documents found in 'documents' folder.")
+# Global index (lazy loaded or created on first upload)
+index = None
 
-    splitter = SentenceSplitter(chunk_size=512, chunk_overlap=128)
-    nodes = splitter.get_nodes_from_documents(docs)
-    index = VectorStoreIndex(nodes, storage_context=storage_context, show_progress=True)
-    logger.info("New index built and stored in Qdrant")
+def initialize_index():
+    """Create or load Qdrant index (only called once)"""
+    global index
+    if index is None:
+        logger.info("Initializing Qdrant index")
+        index = VectorStoreIndex.from_vector_store(
+            vector_store, storage_context=storage_context
+        )
     return index
-
-# Global index (loaded once at startup)
-index = get_or_build_index()
-
-# Custom RAG prompt
-rag_prompt = PromptTemplate(
-    "Context from documents:\n{context_str}\n\n"
-    "Question: {query_str}\n\n"
-    "Answer the question using only the context above. "
-    "If not enough information, say 'I don't have enough information'. "
-    "Include citations with file name and page number if available."
-)
-
-# Build query engine with custom prompt
-response_synthesizer = get_response_synthesizer(text_qa_template=rag_prompt)
-
-query_engine = RetrieverQueryEngine(
-    retriever=index.as_retriever(similarity_top_k=10),
-    response_synthesizer=response_synthesizer,
-    node_postprocessors=[SimilarityPostprocessor(similarity_cutoff=0.3)]
-)
 
 def ingest_and_query(file, question):
     """Upload file → ingest → query"""
+    global index
     answer = ""
     sources = ""
 
     try:
         # 1. Ingest new file if uploaded
         if file:
-            # file is NamedString → use file.name as path
+            # Gradio file is a path → use directly
             tmp_path = file.name
 
             docs = SimpleDirectoryReader(input_files=[tmp_path]).load_data()
             splitter = SentenceSplitter(chunk_size=512, chunk_overlap=128)
             nodes = splitter.get_nodes_from_documents(docs)
 
+            # Initialize index if first upload
+            initialize_index()
+
+            # Insert new nodes
             index.insert_nodes(nodes)
 
-            answer += f"New file ingested: {os.path.basename(tmp_path)} ({len(nodes)} chunks added)\n\n"
+            answer += f"**File ingested:** {os.path.basename(tmp_path)} ({len(nodes)} chunks added)\n\n"
 
         # 2. Answer question if asked
         if question.strip():
+            # Make sure index is initialized
+            initialize_index()
+
+            query_engine = index.as_query_engine(
+                similarity_top_k=10,
+                node_postprocessors=[SimilarityPostprocessor(similarity_cutoff=0.4)],
+                response_synthesizer=get_response_synthesizer(
+                    text_qa_template=PromptTemplate(
+                        "Context from documents:\n{context_str}\n\n"
+                        "Question: {query_str}\n\n"
+                        "Answer using only the context. "
+                        "If not enough information, say 'I don't have enough information'. "
+                        "Include citations with file name and page if available."
+                    )
+                )
+            )
+
             response = query_engine.query(question)
             answer += f"**Answer:** {response.response}\n\n"
             sources = "**Sources & Citations:**\n"
@@ -111,16 +109,15 @@ def ingest_and_query(file, question):
 # Gradio interface
 with gr.Blocks(title="DocMind RAG") as demo:
     gr.Markdown("# DocMind RAG – Private Document Q&A")
-    gr.Markdown("Upload documents → ask questions → get answers with citations")
+    gr.Markdown("Upload documents → ask questions → get cited answers (all in cloud)")
 
     with gr.Row():
-        with gr.Column(scale=1):
-            file_input = gr.File(label="Upload PDF, TXT or DOCX", file_types=[".pdf", ".txt", ".docx"])
-        with gr.Column(scale=3):
-            question_input = gr.Textbox(label="Ask a question about all documents", lines=3, placeholder="e.g. What is the main topic?")
-            submit_btn = gr.Button("Submit")
+        file_input = gr.File(label="Upload PDF, TXT or DOCX", file_types=[".pdf", ".txt", ".docx"])
+        question_input = gr.Textbox(label="Ask a question", lines=3, placeholder="e.g. What is Majd's experience?")
 
-    output_answer = gr.Textbox(label="Answer", lines=12, interactive=False)
+    submit_btn = gr.Button("Submit")
+
+    output_answer = gr.Textbox(label="Answer", lines=10, interactive=False)
     output_sources = gr.Textbox(label="Sources / Citations", lines=10, interactive=False)
 
     submit_btn.click(
@@ -129,7 +126,6 @@ with gr.Blocks(title="DocMind RAG") as demo:
         outputs=[output_answer, output_sources]
     )
 
-    gr.Markdown("Note: First upload may take time to embed. Answers are grounded in uploaded documents only.")
+    gr.Markdown("Note: First upload builds the index. Subsequent uploads add to it. No local folder used.")
 
-# Launch web server
 demo.launch(server_name="0.0.0.0", server_port=7860, share=False)
