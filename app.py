@@ -11,6 +11,7 @@ from qdrant_client import QdrantClient
 from llama_index.core.query_engine import RetrieverQueryEngine
 from llama_index.core.postprocessor import SimilarityPostprocessor
 import logging
+from llama_index.core import PromptTemplate
 
 # Load environment variables
 load_dotenv()
@@ -64,13 +65,22 @@ def build_or_load_index(directory_path: str = "documents"):
 
 def setup_query_engine(index):
     """Create RAG query engine with citation support"""
-    retriever = index.as_retriever(similarity_top_k=5)  # retrieve top 5 chunks
+    retriever = index.as_retriever(similarity_top_k=10)  # retrieve top 10 chunks
+
+    rag_prompt = PromptTemplate(
+    "Context from documents:\n{context_str}\n\n"
+    "Question: {query_str}\n\n"
+    "Answer the question using only the context. "
+    "If not enough information, say 'I don't have enough information'. "
+    "Include citations with file name and page if available."
+    )
 
     query_engine = RetrieverQueryEngine(
         retriever=retriever,
         node_postprocessors=[
-            SimilarityPostprocessor(similarity_cutoff=0.7)  # filter low similarity
-        ]
+            SimilarityPostprocessor(similarity_cutoff=0.4)  # filter low similarity
+        ],
+        text_qa_template=rag_prompt
     )
     return query_engine
 
