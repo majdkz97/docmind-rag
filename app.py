@@ -1,7 +1,8 @@
-# app.py –  Full RAG Chain with Fireworks + Citations
+# app.py – Week 2 Day 4: Gradio Web UI + Full RAG with Upload & Citations
 import os
+import gradio as gr
 from dotenv import load_dotenv
-from llama_index.core import SimpleDirectoryReader, VectorStoreIndex, StorageContext
+from llama_index.core import SimpleDirectoryReader, VectorStoreIndex, StorageContext, PromptTemplate
 from llama_index.core.node_parser import SentenceSplitter
 from llama_index.core import Settings
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
@@ -10,9 +11,9 @@ from llama_index.vector_stores.qdrant import QdrantVectorStore
 from qdrant_client import QdrantClient
 from llama_index.core.query_engine import RetrieverQueryEngine
 from llama_index.core.postprocessor import SimilarityPostprocessor
-import logging
-from llama_index.core import PromptTemplate
 from llama_index.core.response_synthesizers import get_response_synthesizer
+import logging
+import tempfile
 
 # Load environment variables
 load_dotenv()
@@ -30,83 +31,108 @@ Settings.llm = Fireworks(
     max_tokens=1024,
 )
 
-# Qdrant setup
+# Qdrant setup (persistent on disk)
 qdrant_client = QdrantClient(path="./qdrant_data")
 vector_store = QdrantVectorStore(client=qdrant_client, collection_name="doc_chunks")
 storage_context = StorageContext.from_defaults(vector_store=vector_store)
 
-def build_or_load_index(directory_path: str = "documents"):
-    """Load documents, chunk, embed, and store/index in Qdrant"""
+def get_or_build_index():
+    """Load existing Qdrant index or build new one from documents folder"""
     if os.path.exists("./qdrant_data/collections/doc_chunks"):
-        logger.info("Loading existing index from Qdrant")
-        index = VectorStoreIndex.from_vector_store(vector_store, storage_context=storage_context)
-    else:
-        logger.info("Building new index")
-        if not os.path.exists(directory_path):
-            os.makedirs(directory_path)
-            logger.warning(f"Created empty '{directory_path}' folder. Add PDFs/TXT files.")
-            return None
+        logger.info("Loading existing Qdrant index")
+        return VectorStoreIndex.from_vector_store(vector_store, storage_context=storage_context)
+    
+    logger.info("Building new index from documents folder")
+    docs = SimpleDirectoryReader(input_dir="documents", required_exts=[".pdf", ".txt", ".docx"]).load_data()
+    if not docs:
+        raise ValueError("No documents found in 'documents' folder.")
 
-        reader = SimpleDirectoryReader(
-            input_dir=directory_path,
-            required_exts=[".pdf", ".txt", ".docx"],
-            recursive=False
-        )
-        docs = reader.load_data()
-        logger.info(f"Loaded {len(docs)} documents")
-
-        splitter = SentenceSplitter(chunk_size=512, chunk_overlap=128)
-        nodes = splitter.get_nodes_from_documents(docs)
-        logger.info(f"Created {len(nodes)} chunks")
-
-        index = VectorStoreIndex(nodes, storage_context=storage_context, show_progress=True)
-        logger.info("Index created and stored in Qdrant")
-
+    splitter = SentenceSplitter(chunk_size=512, chunk_overlap=128)
+    nodes = splitter.get_nodes_from_documents(docs)
+    index = VectorStoreIndex(nodes, storage_context=storage_context, show_progress=True)
+    logger.info("New index built and stored in Qdrant")
     return index
 
-def setup_query_engine(index):
-    """Create RAG query engine with citation support"""
-    retriever = index.as_retriever(similarity_top_k=10)  # retrieve top 10 chunks
+# Global index (loaded once at startup)
+index = get_or_build_index()
 
-    rag_prompt = PromptTemplate(
+# Custom RAG prompt
+rag_prompt = PromptTemplate(
     "Context from documents:\n{context_str}\n\n"
     "Question: {query_str}\n\n"
-    "Answer the question using only the context. "
+    "Answer the question using only the context above. "
     "If not enough information, say 'I don't have enough information'. "
-    "Include citations with file name and page if available."
-    )
+    "Include citations with file name and page number if available."
+)
 
-    response_synthesizer = get_response_synthesizer(text_qa_template=rag_prompt)
+# Build query engine with custom prompt
+response_synthesizer = get_response_synthesizer(text_qa_template=rag_prompt)
 
-    query_engine = RetrieverQueryEngine(
-        retriever=retriever,
-        response_synthesizer=response_synthesizer,
-        node_postprocessors=[SimilarityPostprocessor(similarity_cutoff=0.5)]
-    )
+query_engine = RetrieverQueryEngine(
+    retriever=index.as_retriever(similarity_top_k=10),
+    response_synthesizer=response_synthesizer,
+    node_postprocessors=[SimilarityPostprocessor(similarity_cutoff=0.5)]
+)
 
-    return query_engine
+def ingest_and_query(file, question):
+    """Upload file → ingest → query"""
+    answer = ""
+    sources = ""
 
-if __name__ == "__main__":
-    index = build_or_load_index("documents")
-    if index:
-        query_engine = setup_query_engine(index)
+    try:
+        # 1. Ingest new file if uploaded
+        if file:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(file.name)[1]) as tmp:
+                tmp.write(file.read())
+                tmp_path = tmp.name
 
-        # Interactive test loop
-        print("\nRAG Query Test – type 'exit' to quit")
-        while True:
-            question = input("Ask a question about the documents: ")
-            if question.lower() == "exit":
-                break
-            if not question.strip():
-                continue
+            docs = SimpleDirectoryReader(input_files=[tmp_path]).load_data()
+            splitter = SentenceSplitter(chunk_size=512, chunk_overlap=128)
+            nodes = splitter.get_nodes_from_documents(docs)
 
+            # Insert new nodes into existing index
+            index.insert_nodes(nodes)
+            os.unlink(tmp_path)
+
+            answer += f"New file ingested: {file.name} ({len(nodes)} chunks added)\n\n"
+
+        # 2. Answer question if asked
+        if question.strip():
             response = query_engine.query(question)
-            print("\nAnswer:")
-            print(response.response)
-            print("\nSources:")
+            answer += f"**Answer:** {response.response}\n\n"
+            sources = "**Sources & Citations:**\n"
             for node in response.source_nodes:
-                print(f"- {node.node.metadata.get('file_name', 'Unknown')} (page {node.node.metadata.get('page_label', 'N/A')})")
-                print(f"  Score: {node.score:.3f}")
-                print(f"  Text preview: {node.node.text[:200]}...\n")
-    else:
-        print("No documents found. Add files to 'documents/' folder.")
+                sources += f"- **{node.node.metadata.get('file_name', 'Unknown')}** (page {node.node.metadata.get('page_label', 'N/A')})\n"
+                sources += f"  Score: {node.score:.3f}\n"
+                sources += f"  Preview: {node.node.text[:200]}...\n\n"
+
+        return answer, sources
+
+    except Exception as e:
+        return f"Error: {str(e)}", ""
+
+# Gradio interface
+with gr.Blocks(title="DocMind RAG") as demo:
+    gr.Markdown("# DocMind RAG – Private Document Q&A")
+    gr.Markdown("Upload documents → ask questions → get answers with citations")
+
+    with gr.Row():
+        with gr.Column(scale=1):
+            file_input = gr.File(label="Upload PDF, TXT or DOCX", file_types=[".pdf", ".txt", ".docx"])
+        with gr.Column(scale=3):
+            question_input = gr.Textbox(label="Ask a question about all documents", lines=3, placeholder="e.g. What is the main topic?")
+            submit_btn = gr.Button("Submit")
+
+    output_answer = gr.Textbox(label="Answer", lines=12, interactive=False)
+    output_sources = gr.Textbox(label="Sources / Citations", lines=10, interactive=False)
+
+    submit_btn.click(
+        ingest_and_query,
+        inputs=[file_input, question_input],
+        outputs=[output_answer, output_sources]
+    )
+
+    gr.Markdown("Note: First upload may take time to embed. Answers are grounded in uploaded documents only.")
+
+# Launch web server
+demo.launch(server_name="0.0.0.0", server_port=7860, share=False)
