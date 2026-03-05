@@ -71,7 +71,7 @@ response_synthesizer = get_response_synthesizer(text_qa_template=rag_prompt)
 query_engine = RetrieverQueryEngine(
     retriever=index.as_retriever(similarity_top_k=10),
     response_synthesizer=response_synthesizer,
-    node_postprocessors=[SimilarityPostprocessor(similarity_cutoff=0.5)]
+    node_postprocessors=[SimilarityPostprocessor(similarity_cutoff=0.3)]
 )
 
 def ingest_and_query(file, question):
