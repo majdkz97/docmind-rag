@@ -12,6 +12,7 @@ from llama_index.core.query_engine import RetrieverQueryEngine
 from llama_index.core.postprocessor import SimilarityPostprocessor
 import logging
 from llama_index.core import PromptTemplate
+from llama_index.core.response_synthesizers import get_response_synthesizer
 
 # Load environment variables
 load_dotenv()
@@ -75,13 +76,14 @@ def setup_query_engine(index):
     "Include citations with file name and page if available."
     )
 
+    response_synthesizer = get_response_synthesizer(text_qa_template=rag_prompt)
+
     query_engine = RetrieverQueryEngine(
         retriever=retriever,
-        node_postprocessors=[
-            SimilarityPostprocessor(similarity_cutoff=0.4)  # filter low similarity
-        ],
-        text_qa_template=rag_prompt
+        response_synthesizer=response_synthesizer,
+        node_postprocessors=[SimilarityPostprocessor(similarity_cutoff=0.5)]
     )
+
     return query_engine
 
 if __name__ == "__main__":
