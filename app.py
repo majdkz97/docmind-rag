@@ -1,4 +1,4 @@
-# app.py – Gradio UI + Auth + Logging + Clear Qdrant Button
+# app.py – Week 2 Day 5: Gradio UI + Auth + Logging + Clear Qdrant Button
 # Enhancements: Chat history, multiple file upload, loading indicator, index stats
 
 import os
@@ -73,6 +73,8 @@ storage_context = StorageContext.from_defaults(
 # Global index
 index = None
 
+# Chat history (list of {"role": "user/assistant", "content": "..."})
+chat_history = []
 
 # -----------------------------
 # Initialize index
@@ -82,7 +84,6 @@ def initialize_index():
 
     if index is None:
         logger.info("Initializing Qdrant index")
-
         index = VectorStoreIndex.from_vector_store(
             vector_store,
             storage_context=storage_context
@@ -95,19 +96,16 @@ def initialize_index():
 # Clear Qdrant safely
 # -----------------------------
 def clear_qdrant():
-
-    global index, qdrant_client, vector_store, storage_context
+    global index, qdrant_client, vector_store, storage_context, chat_history
 
     try:
-
         logger.info("Clearing Qdrant collection")
-
         try:
             qdrant_client.delete_collection("doc_chunks")
         except Exception:
             pass
 
-        # recreate vector store
+        # Recreate vector store
         vector_store = QdrantVectorStore(
             client=qdrant_client,
             collection_name="doc_chunks"
@@ -118,9 +116,9 @@ def clear_qdrant():
         )
 
         index = None
+        chat_history = []  # clear chat history too
 
         logger.info("Qdrant reset completed")
-
         return "✅ Vector database cleared. Upload a new document."
 
     except Exception as e:
@@ -132,20 +130,17 @@ def clear_qdrant():
 # Get current index stats
 # -----------------------------
 def get_index_stats():
-    initialize_index()
     try:
         count = qdrant_client.get_collection("doc_chunks").points_count
-        return f"Current index: {count} chunks"
+        return f"Current knowledge base: {count} chunks"
     except:
-        return "Current index: 0 chunks"
+        return "Current knowledge base: 0 chunks"
 
 
 # -----------------------------
-# Ingest and Query (with chat history)
+# Ingest and Query (with chat history & multiple files)
 # -----------------------------
-chat_history = []
-
-def ingest_and_query(files, question, api_key):
+def ingest_and_query(files, question, api_key, progress=gr.Progress()):
 
     if api_key != APP_API_KEY:
         return "Invalid API key.", "", get_index_stats(), chat_history
@@ -154,13 +149,12 @@ def ingest_and_query(files, question, api_key):
 
     answer = ""
     sources = ""
-    progress = gr.Progress()
 
     try:
-        progress(0.1, desc="Processing files...")
+        progress(0.1, desc="Processing...")
 
         # -----------------
-        # Ingest documents (multiple files)
+        # Ingest multiple files
         # -----------------
         if files:
             progress(0.3, desc="Ingesting files...")
@@ -182,10 +176,12 @@ def ingest_and_query(files, question, api_key):
         # Query with chat history
         # -----------------
         if question.strip():
-            # Build context from history + current question
+            # Build context from recent history
             history_str = ""
-            for user_msg, bot_msg in chat_history[-5:]:  # last 5 turns for context
-                history_str += f"User: {user_msg}\nBot: {bot_msg}\n\n"
+            for msg in chat_history[-6:]:  # last 6 messages for context
+                role = msg["role"]
+                content = msg["content"]
+                history_str += f"{role.capitalize()}: {content}\n"
 
             full_query = f"{history_str}User: {question}"
 
@@ -217,8 +213,9 @@ def ingest_and_query(files, question, api_key):
                 sources += f"Score: {node.score:.3f}\n"
                 sources += f"Preview: {node.node.text[:200]}...\n\n"
 
-            # Update chat history
-            chat_history.append((question, response.response))
+            # Append to chat history
+            chat_history.append({"role": "user", "content": question})
+            chat_history.append({"role": "assistant", "content": response.response})
 
         progress(1.0, desc="Done!")
 
