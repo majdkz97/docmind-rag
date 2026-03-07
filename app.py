@@ -1,4 +1,5 @@
 # app.py – Gradio UI + Auth + Logging + Clear Qdrant Button
+# Enhancements: Chat history, multiple file upload, loading indicator, index stats
 
 import os
 import sys
@@ -14,6 +15,8 @@ from qdrant_client import QdrantClient
 from llama_index.core.postprocessor import SimilarityPostprocessor
 from llama_index.core.response_synthesizers import get_response_synthesizer
 from llama_index.core import PromptTemplate
+import logging
+import tempfile
 
 # Logging
 from loguru import logger
@@ -126,90 +129,104 @@ def clear_qdrant():
 
 
 # -----------------------------
-# Ingest and Query
+# Get current index stats
 # -----------------------------
-def ingest_and_query(file, question, api_key):
+def get_index_stats():
+    initialize_index()
+    try:
+        count = qdrant_client.get_collection("doc_chunks").points_count
+        return f"Current index: {count} chunks"
+    except:
+        return "Current index: 0 chunks"
+
+
+# -----------------------------
+# Ingest and Query (with chat history)
+# -----------------------------
+chat_history = []
+
+def ingest_and_query(files, question, api_key):
 
     if api_key != APP_API_KEY:
-        return "Invalid API key.", ""
+        return "Invalid API key.", "", get_index_stats(), chat_history
 
     initialize_index()
 
     answer = ""
     sources = ""
+    progress = gr.Progress()
 
     try:
+        progress(0.1, desc="Processing files...")
 
         # -----------------
-        # Ingest document
+        # Ingest documents (multiple files)
         # -----------------
-        if file:
+        if files:
+            progress(0.3, desc="Ingesting files...")
+            all_nodes = []
+            for file in files:
+                tmp_path = file.name
+                docs = SimpleDirectoryReader(input_files=[tmp_path]).load_data()
+                splitter = SentenceSplitter(chunk_size=512, chunk_overlap=128)
+                nodes = splitter.get_nodes_from_documents(docs)
+                all_nodes.extend(nodes)
 
-            tmp_path = file.name
+            if all_nodes:
+                index.insert_nodes(all_nodes)
+                answer += f"**Ingested {len(files)} file(s)** ({len(all_nodes)} chunks added)\n\n"
 
-            docs = SimpleDirectoryReader(
-                input_files=[tmp_path]
-            ).load_data()
-
-            splitter = SentenceSplitter(
-                chunk_size=512,
-                chunk_overlap=128
-            )
-
-            nodes = splitter.get_nodes_from_documents(docs)
-
-            index.insert_nodes(nodes)
-
-            answer += f"File ingested: {os.path.basename(tmp_path)} ({len(nodes)} chunks added)\n\n"
+        progress(0.6, desc="Generating answer...")
 
         # -----------------
-        # Query
+        # Query with chat history
         # -----------------
         if question.strip():
+            # Build context from history + current question
+            history_str = ""
+            for user_msg, bot_msg in chat_history[-5:]:  # last 5 turns for context
+                history_str += f"User: {user_msg}\nBot: {bot_msg}\n\n"
+
+            full_query = f"{history_str}User: {question}"
 
             query_engine = index.as_query_engine(
-
                 similarity_top_k=10,
-
                 node_postprocessors=[
                     SimilarityPostprocessor(similarity_cutoff=0.4)
                 ],
-
                 response_synthesizer=get_response_synthesizer(
-
                     text_qa_template=PromptTemplate(
-
+                        "Conversation history:\n{history_str}\n\n"
                         "Context from documents:\n{context_str}\n\n"
                         "Question: {query_str}\n\n"
-                        "Answer using only the context. "
+                        "Answer using only the context and history. "
                         "If not enough information say "
                         "'I don't have enough information'. "
                         "Include citations."
-
-                    )
+                    ).partial_format(history_str=history_str)
                 )
             )
 
             response = query_engine.query(question)
+            answer += f"**Answer:** {response.response}\n\n"
 
-            answer += f"Answer:\n{response.response}\n\n"
-
-            sources = "Sources:\n"
-
+            sources = "**Sources:**\n"
             for node in response.source_nodes:
-
                 sources += f"- {node.node.metadata.get('file_name','Unknown')}"
                 sources += f" (page {node.node.metadata.get('page_label','N/A')})\n"
                 sources += f"Score: {node.score:.3f}\n"
                 sources += f"Preview: {node.node.text[:200]}...\n\n"
 
-        return answer, sources
+            # Update chat history
+            chat_history.append((question, response.response))
+
+        progress(1.0, desc="Done!")
+
+        return answer, sources, get_index_stats(), chat_history
 
     except Exception as e:
-
         logger.error(f"Error in ingest/query: {e}")
-
-        return f"Error: {str(e)}", ""
+        return f"Error: {str(e)}", "", get_index_stats(), chat_history
 
 
 # -----------------------------
@@ -218,10 +235,7 @@ def ingest_and_query(file, question, api_key):
 with gr.Blocks(title="DocMind RAG") as demo:
 
     gr.Markdown("# DocMind RAG – Private Document Q&A")
-
-    gr.Markdown(
-        "Upload documents → ask questions → get cited answers"
-    )
+    gr.Markdown("Upload documents → ask questions → get cited answers")
 
     api_key_input = gr.Textbox(
         label="API Key",
@@ -229,8 +243,9 @@ with gr.Blocks(title="DocMind RAG") as demo:
     )
 
     file_input = gr.File(
-        label="Upload PDF, TXT or DOCX",
-        file_types=[".pdf", ".txt", ".docx"]
+        label="Upload one or multiple PDF/TXT/DOCX",
+        file_types=[".pdf", ".txt", ".docx"],
+        file_count="multiple"
     )
 
     question_input = gr.Textbox(
@@ -254,15 +269,26 @@ with gr.Blocks(title="DocMind RAG") as demo:
         interactive=False
     )
 
+    index_stats = gr.Textbox(
+        label="Current Knowledge Base",
+        interactive=False,
+        value=get_index_stats()
+    )
+
+    chatbot = gr.Chatbot(label="Conversation History")
+
     submit_btn.click(
         ingest_and_query,
         inputs=[file_input, question_input, api_key_input],
-        outputs=[output_answer, output_sources]
+        outputs=[output_answer, output_sources, index_stats, chatbot]
     )
 
     clear_btn.click(
         clear_qdrant,
         outputs=output_answer
+    ).then(
+        lambda: get_index_stats(),
+        outputs=index_stats
     )
 
     gr.Markdown(
