@@ -1,5 +1,5 @@
 # app.py – Gradio UI + Auth + Logging + Clear Qdrant Button
-# With chat history, multiple files, loading, index stats
+# UI Update: Chatbot style – question at bottom, conversation above, clean history
 
 import os
 import sys
@@ -47,7 +47,7 @@ storage_context = StorageContext.from_defaults(vector_store=vector_store)
 
 # Global variables
 index = None
-chat_history = []  # Global chat history
+chat_history = []  # [{"role": "user/assistant", "content": "..."}]
 
 
 # Initialize index
@@ -72,13 +72,13 @@ def clear_qdrant():
         vector_store = QdrantVectorStore(client=qdrant_client, collection_name="doc_chunks")
         storage_context = StorageContext.from_defaults(vector_store=vector_store)
         index = None
-        chat_history = []  # Clear history too
+        chat_history = []  # Clear history
 
         logger.info("Qdrant reset completed")
-        return "✅ Vector database cleared. Upload a new document."
+        return "✅ Vector database cleared. Upload a new document.", chat_history
     except Exception as e:
         logger.error(f"Error clearing Qdrant: {e}")
-        return f"Error clearing Qdrant: {str(e)}"
+        return f"Error clearing Qdrant: {str(e)}", chat_history
 
 
 # Get index stats
@@ -95,12 +95,12 @@ def ingest_and_query(files, question, api_key, progress=gr.Progress()):
     global chat_history
 
     if api_key != APP_API_KEY:
-        return "Invalid API key.", "", get_index_stats(), chat_history
+        return "**Invalid API key.**", "", get_index_stats(), chat_history
 
     initialize_index()
 
     answer = ""
-    sources = ""
+    details = ""
 
     try:
         progress(0.1, desc="Processing...")
@@ -118,7 +118,7 @@ def ingest_and_query(files, question, api_key, progress=gr.Progress()):
 
             if all_nodes:
                 index.insert_nodes(all_nodes)
-                answer += f"Ingested {len(files)} file(s) ({len(all_nodes)} chunks added)\n\n"
+                details += f"Ingested {len(files)} file(s) ({len(all_nodes)} chunks added)\n\n"
 
         progress(0.6, desc="Generating answer...")
 
@@ -148,58 +148,97 @@ def ingest_and_query(files, question, api_key, progress=gr.Progress()):
             )
 
             response = query_engine.query(question)
-            answer += f"**{response.response}**"
+            clean_answer = response.response.strip()
 
-            sources = "**Sources:**\n"
+            # Answer field: ONLY bold clean answer
+            answer = f"**{clean_answer}**"
+
+            # Details field: everything else
+            details += "**Sources:**\n"
             for node in response.source_nodes:
-                sources += f"- {node.node.metadata.get('file_name','Unknown')} (page {node.node.metadata.get('page_label','N/A')})\n"
-                sources += f"  Score: {node.score:.3f}\n"
-                sources += f"  Preview: {node.node.text[:200]}...\n\n"
+                details += f"- {node.node.metadata.get('file_name','Unknown')} (page {node.node.metadata.get('page_label','N/A')})\n"
+                details += f"  Score: {node.score:.3f}\n"
+                details += f"  Preview: {node.node.text[:200]}...\n\n"
 
-            # Append to history
+            # Append to chat history (clean text only)
             chat_history.append({"role": "user", "content": question})
-            chat_history.append({"role": "assistant", "content": response.response})
+            chat_history.append({"role": "assistant", "content": clean_answer})
 
         progress(1.0, desc="Done!")
 
-        return answer, sources, get_index_stats(), chat_history
+        return answer, details, get_index_stats(), chat_history
 
     except Exception as e:
         logger.error(f"Error in ingest/query: {e}")
         return f"**Error:** {str(e)}", "", get_index_stats(), chat_history
 
 
-# Gradio UI
+# Gradio UI – New layout as requested
 with gr.Blocks(title="DocMind RAG") as demo:
     gr.Markdown("# DocMind RAG – Private Document Q&A")
     gr.Markdown("Upload documents → ask questions → get cited answers")
 
-    api_key_input = gr.Textbox(label="API Key", type="password")
-    file_input = gr.File(label="Upload one or multiple PDF/TXT/DOCX", file_types=[".pdf", ".txt", ".docx"], file_count="multiple")
-    question_input = gr.Textbox(label="Ask a question", lines=3)
+    with gr.Row():
+        api_key_input = gr.Textbox(label="API Key", type="password", scale=1)
 
-    submit_btn = gr.Button("Submit")
+    with gr.Row():
+        file_input = gr.File(
+            label="Upload one or multiple PDF/TXT/DOCX",
+            file_types=[".pdf", ".txt", ".docx"],
+            file_count="multiple",
+            scale=1
+        )
+
+    gr.Markdown("### Conversation")
+
+    chatbot = gr.Chatbot(label="Chat History", height=400)
+
+    with gr.Row():
+        question_input = gr.Textbox(
+            label="Ask a question",
+            lines=2,
+            placeholder="Type your question here...",
+            scale=4
+        )
+        submit_btn = gr.Button("Send", scale=1)
+
     clear_btn = gr.Button("Clear Vector Database")
 
-    output_answer = gr.Markdown(label="Answer")
-    output_sources = gr.Textbox(label="Details / Sources / Ingestion Info", lines=10, interactive=False)
-    index_stats = gr.Textbox(label="Current Knowledge Base", interactive=False, value=get_index_stats())
-    chatbot = gr.Chatbot(label="Conversation History")
+    output_details = gr.Textbox(
+        label="Details / Sources / Ingestion Info",
+        lines=8,
+        interactive=False
+    )
 
+    index_stats = gr.Textbox(
+        label="Current Knowledge Base",
+        interactive=False,
+        value=get_index_stats()
+    )
+
+    # Submit: question + files
     submit_btn.click(
         ingest_and_query,
         inputs=[file_input, question_input, api_key_input],
-        outputs=[output_answer, output_sources, index_stats, chatbot]
+        outputs=[output_details, output_details, index_stats, chatbot]
     )
 
+    # Clear button
     clear_btn.click(
         clear_qdrant,
-        outputs=output_answer
+        outputs=output_details
     ).then(
         lambda: get_index_stats(),
         outputs=index_stats
+    ).then(
+        lambda: [],  # clear chat history on UI
+        outputs=chatbot
     )
 
     gr.Markdown("API key required. Clear the database to start fresh.")
 
-demo.launch(server_name="0.0.0.0", server_port=7860, share=False)
+demo.launch(
+    server_name="0.0.0.0",
+    server_port=7860,
+    share=False
+)
