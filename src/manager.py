@@ -130,6 +130,12 @@ class RAGManager:
 
             # Phase 1: Ingestion
             if files:
+                progress(0.2, desc="Clearing previous database...")
+                # Automatically format the database so new inputs don't mix with old ones
+                self.clear_database()
+                # Must re-initialize index since clear_database() drops it 
+                self._initialize_index()
+                
                 progress(0.3, desc="Ingesting files...")
                 file_paths = [file.name for file in files]
                 new_nodes = self.doc_processor.process_files(file_paths)
