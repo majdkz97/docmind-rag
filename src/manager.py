@@ -38,9 +38,12 @@ class RAGManager:
             "Conversation history:\n{history_str}\n\n"
             "Context from documents:\n{context_str}\n\n"
             "Question: {query_str}\n\n"
-            "Answer using only the context and history. "
-            "If not enough information say 'I don't have enough information'. "
-            "Include citations."
+            "Answer the question using only the provided context and conversation history. "
+            "If the context does not contain enough information to answer the question, just say 'I don't have enough information'.\n"
+            "Organize your answer clearly (using paragraphs or bullet points if appropriate).\n"
+            "When citing sources, you MUST use only the base file name (e.g. 'document.pdf') and the page number. "
+            "NEVER include full directory paths (like /tmp/gradio/...) in your citations or output. "
+            "Format citations like this: [filename.pdf, Page X]."
         )
 
     def _initialize_index(self) -> None:

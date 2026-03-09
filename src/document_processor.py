@@ -24,4 +24,11 @@ class DocumentProcessor:
         """
         # Group files into a single SimpleDirectoryReader call for optimized batch I/O.
         docs = SimpleDirectoryReader(input_files=file_paths).load_data()
+        
+        # Scrub long absolute server paths from metadata so the LLM doesn't include them in citations
+        for doc in docs:
+            if "file_path" in doc.metadata:
+                # Replace the full /tmp/gradio/... path with just the base file name
+                doc.metadata["file_path"] = doc.metadata.get("file_name", "Unknown Document")
+                
         return self.splitter.get_nodes_from_documents(docs)
