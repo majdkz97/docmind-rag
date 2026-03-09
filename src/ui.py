@@ -81,7 +81,7 @@ class RAGAppUI:
         """Defines the frontend view and attaches the respective component signals."""
         theme = gr.themes.Default(primary_hue="indigo", neutral_hue="slate")
         
-        with gr.Blocks(title="DocMind RAG", theme=theme, css=self.custom_css) as demo:
+        with gr.Blocks(title="DocMind RAG") as demo:
             with gr.Row():
                 # Sidebar
                 with gr.Column(scale=1, elem_classes="sidebar-column"):
@@ -117,9 +117,8 @@ class RAGAppUI:
                 with gr.Column(scale=3):
                     chatbot = gr.Chatbot(
                         label="Chat History", 
-                        height=600, 
-                        bubble_full_width=False,
-                        layout="bubble"
+                        height=600,
+                        type="messages"
                     )
                     
                     with gr.Row(equal_height=True):
@@ -160,5 +159,7 @@ class RAGAppUI:
         demo.launch(
             server_name="0.0.0.0",
             server_port=7860,
-            share=False
+            share=False,
+            theme=theme,
+            css=self.custom_css
         )
