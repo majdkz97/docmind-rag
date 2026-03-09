@@ -117,8 +117,7 @@ class RAGAppUI:
                 with gr.Column(scale=3):
                     chatbot = gr.Chatbot(
                         label="Chat History", 
-                        height=600,
-                        type="messages"
+                        height=600
                     )
                     
                     with gr.Row(equal_height=True):
