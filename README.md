@@ -62,7 +62,7 @@ SOON
 
 4. **Run the app**
    ```bash
-   python app.py
+   python main.py
    ```
 
 5. **Open in browser**
@@ -76,7 +76,13 @@ SOON
 
 ```
 docmind-rag/
-├── app.py               # Main Gradio app + full RAG pipeline
+├── src/
+│   ├── __init__.py          # Package init
+│   ├── config.py            # App configuration and settings
+│   ├── document_processor.py# Document parsing logic
+│   ├── manager.py           # Core RAG querying and vector DB logic
+│   └── ui.py                # Gradio frontend UI
+├── main.py              # Main entry point to launch the app
 ├── requirements.txt     # All dependencies
 ├── .env                 # Secrets (never commit!)
 ├── logs/                # Rotating log files (auto-created)
