@@ -11,20 +11,42 @@ class RAGAppUI:
     def __init__(self, manager: RAGManager) -> None:
         self.manager = manager
         self.custom_css = """
+        /* Base Colors (Light Mode) */
+        :root {
+            --bg-color: #F9FAFB;
+            --surface-color: #FFFFFF;
+            --border-color: #E5E7EB;
+            --text-primary: #111827;
+            --bot-bg: #FFFFFF;
+            --upload-bg: #F9FAFB;
+            --upload-hover: #EEF2FF;
+        }
+
+        /* Dark Mode Colors (Gradio naturally adds .dark to body) */
+        body.dark {
+            --bg-color: #0b0f19;
+            --surface-color: #111827;
+            --border-color: #374151;
+            --text-primary: #F9FAFB;
+            --bot-bg: #1f2937;
+            --upload-bg: #111827;
+            --upload-hover: #1f2937;
+        }
+
         /* Overall Background and Font */
         body, .gradio-container {
-            background-color: #F9FAFB !important;
+            background-color: var(--bg-color) !important;
             font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif !important;
-            color: #111827 !important;
+            color: var(--text-primary) !important;
         }
 
         /* Sidebar styling */
         .sidebar-column {
-            background-color: #FFFFFF !important;
-            border-right: 1px solid #E5E7EB;
+            background-color: var(--surface-color) !important;
+            border-right: 1px solid var(--border-color);
             padding: 24px !important;
             border-radius: 12px;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+            box-shadow: 0 1px 3px rgba(0,0,0,0.2);
             height: 100%;
         }
 
@@ -46,25 +68,25 @@ class RAGAppUI:
 
         /* Assistant Message Bubble */
         .bot-row .message {
-            background-color: #FFFFFF !important;
-            border: 1px solid #E5E7EB !important;
-            color: #111827 !important;
+            background-color: var(--bot-bg) !important;
+            border: 1px solid var(--border-color) !important;
+            color: var(--text-primary) !important;
             border-radius: 16px 16px 16px 4px !important;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.02) !important;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1) !important;
             font-size: 15px;
             line-height: 1.6;
         }
 
         /* File Upload Box (Drag and Drop zone) */
         .upload-container {
-            border: 2px dashed #D1D5DB !important;
+            border: 2px dashed var(--border-color) !important;
             border-radius: 12px !important;
-            background-color: #F9FAFB !important;
+            background-color: var(--upload-bg) !important;
             transition: border-color 0.2s ease, background-color 0.2s ease !important;
         }
         .upload-container:hover {
             border-color: #4F46E5 !important;
-            background-color: #EEF2FF !important;
+            background-color: var(--upload-hover) !important;
         }
 
         /* Smooth Slide-in Animation for chat messages */
