@@ -130,21 +130,28 @@ class RAGManager:
 
             # Phase 1: Ingestion
             if files:
-                progress(0.2, desc="Clearing previous database...")
-                # Automatically format the database so new inputs don't mix with old ones
-                self.clear_database()
-                # Must re-initialize index since clear_database() drops it 
-                self._initialize_index()
+                current_file_paths = [file.name for file in files]
                 
-                progress(0.3, desc="Ingesting files...")
-                file_paths = [file.name for file in files]
-                new_nodes = self.doc_processor.process_files(file_paths)
+                # Check if we actually have new files to ingest
+                # If they are exactly the same as the last ones, skip clearing and re-ingesting!
+                if not hasattr(self, "last_ingested_files") or current_file_paths != self.last_ingested_files:
+                    progress(0.2, desc="Clearing previous database...")
+                    # Automatically format the database so new inputs don't mix with old ones
+                    # This ALSO clears the chat history to start a fresh session!
+                    self.clear_database()
+                    # Must re-initialize index since clear_database() drops it 
+                    self._initialize_index()
+                    
+                    progress(0.3, desc="Ingesting files...")
+                    new_nodes = self.doc_processor.process_files(current_file_paths)
 
-                if new_nodes:
-                    # 'index' shouldn't be None per earlier initialization
-                    if self.index:
-                        self.index.insert_nodes(new_nodes)
-                    details += f"Ingested {len(files)} file(s) ({len(new_nodes)} chunks added)\n\n"
+                    if new_nodes:
+                        # 'index' shouldn't be None per earlier initialization
+                        if self.index:
+                            self.index.insert_nodes(new_nodes)
+                        details += f"Ingested {len(files)} file(s) ({len(new_nodes)} chunks added)\n\n"
+                    
+                    self.last_ingested_files = current_file_paths
 
             progress(0.6, desc="Generating answer...")
 
